@@ -89,8 +89,9 @@ auto BlockManager::write_partial_block(block_id_t block_id, const u8 *data,
                                        usize len) -> ChfsNullResult {
 
     // TODO: Implement this function.
-    UNIMPLEMENTED();
-
+    // UNIMPLEMENTED();
+    u8 *target = block_id * block_sz + block_data + offset;
+    memcpy(target, data, block_sz - offset);
     return KNullOk;
 }
 
