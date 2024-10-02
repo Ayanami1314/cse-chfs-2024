@@ -4,8 +4,11 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "filesystem/directory_op.h"
+#include "common/config.h"
+#include "common/error_code.h"
 #include "common/result.h"
 
 namespace chfs {
@@ -110,8 +113,20 @@ auto FileOperation::lookup(inode_id_t id,
     std::list<DirectoryEntry> list;
 
     // TODO: Implement this function.
-    UNIMPLEMENTED();
-
+    // UNIMPLEMENTED();
+    auto content = this->read_file(id);
+    if (content.is_err()) {
+        return ChfsResult<inode_id_t>(content.unwrap_error());
+    }
+    auto content_str =
+        std::string(content.unwrap().begin(), content.unwrap().end());
+    std::list<DirectoryEntry> entries;
+    parse_directory(content_str, entries);
+    for (const auto &[entry_name, id] : entries) {
+        if (entry_name == std::string(name)) {
+            return ChfsResult<inode_id_t>(id);
+        }
+    }
     return ChfsResult<inode_id_t>(ErrorType::NotExist);
 }
 
@@ -124,9 +139,34 @@ auto FileOperation::mk_helper(inode_id_t id, const char *name,
     //    If already exist, return ErrorType::AlreadyExist.
     // 2. Create the new inode.
     // 3. Append the new entry to the parent directory.
-    UNIMPLEMENTED();
+    // UNIMPLEMENTED();
+    std::list<DirectoryEntry> list;
+    auto content = this->read_file(id);
+    if (content.is_err()) {
+        return ChfsResult<inode_id_t>(content.unwrap_error());
+    }
+    auto content_str =
+        std::string(content.unwrap().begin(), content.unwrap().end());
+    std::list<DirectoryEntry> entries;
+    parse_directory(content_str, entries);
+    for (const auto &[entry_name, id] : entries) {
+        if (entry_name == std::string(name)) {
+            return ChfsResult<inode_id_t>(ErrorType::AlreadyExist);
+        }
+    }
 
-    return ChfsResult<inode_id_t>(static_cast<inode_id_t>(0));
+    auto new_inode = this->alloc_inode(type);
+    if (new_inode.is_err()) {
+        return ChfsResult<inode_id_t>(new_inode.unwrap_error());
+    }
+    auto new_inode_id = new_inode.unwrap();
+    append_to_directory(content_str, name, new_inode_id);
+    auto write_res = this->write_file(
+        id, std::vector<u8>(content_str.begin(), content_str.end()));
+    if (write_res.is_err()) {
+        return ChfsResult<inode_id_t>(write_res.unwrap_error());
+    }
+    return ChfsResult<inode_id_t>(static_cast<inode_id_t>(new_inode_id));
 }
 
 // {Your code here}
@@ -136,9 +176,20 @@ auto FileOperation::unlink(inode_id_t parent,
     // TODO:
     // 1. Remove the file, you can use the function `remove_file`
     // 2. Remove the entry from the directory.
-    UNIMPLEMENTED();
-
-    return KNullOk;
+    // UNIMPLEMENTED();
+    auto target_inode_id = this->lookup(parent, name);
+    if (target_inode_id.is_err()) {
+        return ChfsNullResult(target_inode_id.unwrap_error());
+    }
+    auto dir = this->read_file(parent);
+    if (dir.is_err()) {
+        return ChfsNullResult(dir.unwrap_error());
+    }
+    auto content_str = std::string(dir.unwrap().begin(), dir.unwrap().end());
+    rm_from_directory(content_str, name);
+    auto res = this->write_file(
+        parent, std::vector<u8>(content_str.begin(), content_str.end()));
+    return res;
 }
 
 } // namespace chfs

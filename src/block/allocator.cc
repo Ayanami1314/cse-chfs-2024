@@ -1,5 +1,6 @@
 #include "block/allocator.h"
 #include "common/bitmap.h"
+#include "common/macros.h"
 
 namespace chfs {
 
@@ -126,6 +127,8 @@ auto BlockAllocator::allocate() -> ChfsResult<block_id_t> {
             const auto total_bits_per_block = bm->block_size() * KBitsPerByte;
             block_id_t retval =
                 static_cast<block_id_t>(res.value() + i * total_bits_per_block);
+            CHFS_ASSERT(retval >= bitmap_block_id + bitmap_block_cnt,
+                        "allocate the reserved block");
             bitmap.set(res.value());
             // update bitmap
             bm->write_block(i + bitmap_block_id, buffer.data());
@@ -134,8 +137,6 @@ auto BlockAllocator::allocate() -> ChfsResult<block_id_t> {
             // 2. Flush the changed bitmap block back to the block manager.
             // 3. Calculate the value of `retval`.
             // UNIMPLEMENTED();
-            // update block
-            bm->write_block(retval, buffer.data());
             return ChfsResult<block_id_t>(retval);
         }
     }
@@ -155,9 +156,14 @@ auto BlockAllocator::deallocate(block_id_t block_id) -> ChfsNullResult {
     //    if you find `block_id` is invalid (e.g. already freed).
 
     // UNIMPLEMENTED();
+    CHFS_ASSERT(block_id >= bitmap_block_id + bitmap_block_cnt,
+                "deallocate the reserved block");
     const auto total_bits_per_block = this->bm->block_size() * KBitsPerByte;
     const auto cur_bitmap_block_id =
         this->bitmap_block_id + block_id / total_bits_per_block;
+    CHFS_ASSERT(cur_bitmap_block_id < bitmap_block_id + bitmap_block_cnt,
+                "invalid bitmap block id");
+
     auto buffer = std::vector<u8>(this->bm->block_size());
     this->bm->read_block(cur_bitmap_block_id, buffer.data());
     auto bitmap = Bitmap(buffer.data(), this->bm->block_size());
@@ -166,7 +172,7 @@ auto BlockAllocator::deallocate(block_id_t block_id) -> ChfsNullResult {
     if (!bitmap.check(block_id % total_bits_per_block)) {
         return ChfsNullResult(ErrorType::INVALID_ARG);
     }
-    bitmap.set(block_id % total_bits_per_block);
+    bitmap.clear(block_id % total_bits_per_block);
     bm->write_block(cur_bitmap_block_id, buffer.data());
     return KNullOk;
 }

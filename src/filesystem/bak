@@ -1,10 +1,6 @@
-#include <cstring>
 #include <ctime>
-#include <iostream>
 #include <vector>
 
-#include "common/config.h"
-#include "common/macros.h"
 #include "filesystem/operations.h"
 #include "metadata/inode.h"
 
@@ -107,18 +103,7 @@ auto FileOperation::write_file(inode_id_t id, const std::vector<u8> &content)
     original_file_sz = inode_p->get_size();
     old_block_num = calculate_block_sz(original_file_sz, block_size);
     new_block_num = calculate_block_sz(content.size(), block_size);
-    if (new_block_num > inlined_blocks_num ||
-        old_block_num > inlined_blocks_num) {
-        auto indirect_block_id =
-            inode_p->get_or_insert_indirect_block(block_allocator_);
-        if (indirect_block_id.is_err()) {
-            error_code = indirect_block_id.unwrap_error();
-            goto err_ret;
-        }
-        indirect_block.resize(block_size);
-        block_manager_->read_block(indirect_block_id.unwrap(),
-                                   indirect_block.data());
-    }
+
     if (new_block_num > old_block_num) {
         // If we need to allocate more blocks.
         for (usize idx = old_block_num; idx < new_block_num; ++idx) {
@@ -130,30 +115,39 @@ auto FileOperation::write_file(inode_id_t id, const std::vector<u8> &content)
             //    You may use function `get_or_insert_indirect_block`
             //    in the case of indirect block.
             // UNIMPLEMENTED();
-            // ATTENTION assume there is only one level of indirect block
-            auto res = block_allocator_->allocate();
-            if (res.is_err()) {
-                error_code = res.unwrap_error();
-                goto err_ret;
+            // TODO: optimize, reduce jump count
+            auto bid = block_allocator_->allocate();
+            auto cur_idx = idx;
+            Inode *cur_inode = inode_p;
+            while (!cur_inode->is_direct_block(cur_idx)) {
+                auto indirect_block_id =
+                    cur_inode->get_or_insert_indirect_block(block_allocator_);
+                if (indirect_block_id.is_err()) {
+                    goto err_ret;
+                }
+                cur_idx -= cur_inode->get_direct_block_num();
+                std::vector<u8> buffer(block_manager_->block_size());
+                auto res = block_manager_->read_block(
+                    indirect_block_id.unwrap(), buffer.data());
+                if (res.is_err()) {
+                    goto err_ret;
+                }
+                cur_inode = reinterpret_cast<Inode *>(buffer.data());
+                bool create_inode =
+                    cur_idx == 0; // NOTE: -= direct_block_num before
+                if (create_inode) {
+                    *cur_inode =
+                        Inode(inode_p->type, block_manager_->block_size());
+                    inode_manager_->allocate_inode(inode_p->type,
+                                                   indirect_block_id.unwrap());
+                    break;
+                }
             }
-            block_id_t alloc_bid = res.unwrap();
-            std::cout << "alloc id: " << alloc_bid << std::endl;
-            if (inode_p->is_direct_block(idx)) {
-                inode_p->set_block_direct(idx, alloc_bid);
-                continue;
-            }
-            (reinterpret_cast<block_id_t *>(
-                indirect_block.data()))[idx - inlined_blocks_num] = alloc_bid;
+            cur_inode->set_block_direct(cur_idx, bid.unwrap());
         }
-        // if (new_block_num > inlined_blocks_num ||
-        //     old_block_num > inlined_blocks_num) {
-        //     block_manager_->write_block(inode_p->get_indirect_block_id(),
-        //                                 indirect_block.data());
-        // }
 
     } else {
         // We need to free the extra blocks.
-        // ATTENTION ERROR here
         for (usize idx = new_block_num; idx < old_block_num; ++idx) {
             if (inode_p->is_direct_block(idx)) {
 
@@ -164,33 +158,33 @@ auto FileOperation::write_file(inode_id_t id, const std::vector<u8> &content)
                 if (res.is_err()) {
                     goto err_ret;
                 }
-                std::cout << "dealloc indirect id: " << bid << std::endl;
                 inode_p->set_block_direct(idx, KInvalidBlockID);
             } else {
 
                 // TODO: Free the indirect extra block.
                 // UNIMPLEMENTED();
-                auto indirect_block_idx = idx - inlined_blocks_num;
-                auto free_bid = reinterpret_cast<block_id_t *>(
-                    indirect_block.data())[indirect_block_idx];
-                CHFS_ASSERT(free_bid > 0, "free_bid should be positive");
 
-                reinterpret_cast<block_id_t *>(
-                    indirect_block.data())[indirect_block_idx] =
-                    KInvalidBlockID;
-                auto res = block_allocator_->deallocate(free_bid);
-                std::cout << "dealloc indirect id: " << free_bid << std::endl;
-                if (res.is_err()) {
-                    error_code = res.unwrap_error();
-                    goto err_ret;
+                auto cur_idx = idx;
+                Inode *cur_inode = inode_p;
+
+                while (!cur_inode->is_direct_block(cur_idx)) {
+                    auto indirect_block_id = cur_inode->get_indirect_block_id();
+                    cur_idx -= cur_inode->get_direct_block_num();
+                    std::vector<u8> buffer(block_manager_->block_size());
+                    auto res = block_manager_->read_block(indirect_block_id,
+                                                          buffer.data());
+                    if (res.is_err()) {
+                        goto err_ret;
+                    }
+                    // bool free_indirect_inode = cur_idx == 0;
+                    // TODO: free inode?
+                    // HINT: multi free?
+
+                    cur_inode = reinterpret_cast<Inode *>(buffer.data());
                 }
             }
         }
-        // if (old_block_num > inlined_blocks_num ||
-        //     new_block_num > inlined_blocks_num) {
-        //     this->block_manager_->write_block(inode_p->get_indirect_block_id(),
-        //                                       indirect_block.data());
-        // }
+
         // If there are no more indirect blocks.
         if (old_block_num > inlined_blocks_num &&
             new_block_num <= inlined_blocks_num && true) {
@@ -220,30 +214,20 @@ auto FileOperation::write_file(inode_id_t id, const std::vector<u8> &content)
                           : (content.size() - write_sz);
             std::vector<u8> buffer(block_size);
             memcpy(buffer.data(), content.data() + write_sz, sz);
-            block_id_t cur_block_id = 0;
+
             if (inode_p->is_direct_block(block_idx)) {
 
                 // TODO: Implement getting block id of current direct block.
-                // UNIMPLEMENTED();
-                cur_block_id = (*inode_p)[block_idx];
+                UNIMPLEMENTED();
+
             } else {
 
                 // TODO: Implement getting block id of current indirect block.
-                // UNIMPLEMENTED();
-                cur_block_id = (reinterpret_cast<block_id_t *>(
-                    indirect_block.data()))[block_idx - inlined_blocks_num];
-                CHFS_ASSERT(cur_block_id > 0,
-                            "cur_block_id should be positive");
+                UNIMPLEMENTED();
             }
 
             // TODO: Write to current block.
-            // UNIMPLEMENTED();
-            auto write_res =
-                block_manager_->write_block(cur_block_id, buffer.data());
-            if (write_res.is_err()) {
-                error_code = write_res.unwrap_error();
-                goto err_ret;
-            }
+            UNIMPLEMENTED();
 
             write_sz += sz;
             block_idx += 1;
@@ -294,7 +278,6 @@ auto FileOperation::read_file(inode_id_t id) -> ChfsResult<std::vector<u8>> {
     u64 read_sz = 0;
 
     auto inode_res = this->inode_manager_->read_inode(id, inode);
-    auto inline_blocks_num = inode_p->get_direct_block_num();
     if (inode_res.is_err()) {
         error_code = inode_res.unwrap_error();
         // I know goto is bad, but we have no choice
@@ -303,24 +286,14 @@ auto FileOperation::read_file(inode_id_t id) -> ChfsResult<std::vector<u8>> {
 
     file_sz = inode_p->get_size();
     content.reserve(file_sz);
-    if (file_sz > inline_blocks_num * block_size) {
-        block_id_t indirect_block_id = inode_p->get_indirect_block_id();
-        auto res = block_manager_->read_block(indirect_block_id,
-                                              indirect_block.data());
-        if (res.is_err()) {
-            error_code = res.unwrap_error();
-            goto err_ret;
-        }
-        indirect_block.resize(
-            block_size); // ATTENTION: read/reserve NOT update size
-    }
+
     // Now read the file
     while (read_sz < file_sz) {
         auto sz = ((inode_p->get_size() - read_sz) > block_size)
                       ? block_size
                       : (inode_p->get_size() - read_sz);
         std::vector<u8> buffer(block_size);
-        block_id_t cur_block_id = 0;
+        auto cur_block_id = 0;
         // Get current block id.
         if (inode_p->is_direct_block(read_sz / block_size)) {
             // TODO: Implement the case of direct block.
@@ -329,19 +302,17 @@ auto FileOperation::read_file(inode_id_t id) -> ChfsResult<std::vector<u8>> {
 
         } else {
             // TODO: Implement the case of indirect block.
-            // UNIMPLEMENTED();
-            cur_block_id = (reinterpret_cast<block_id_t *>(
-                indirect_block
-                    .data()))[read_sz / block_size - inline_blocks_num];
-            // std::cout << cur_block_id << std::endl;
+            UNIMPLEMENTED();
+            // NOTE: multi level?
         }
 
         // TODO: Read from current block and store to `content`.
-        block_manager_->read_block(cur_block_id, content.data() + read_sz);
-        // UNIMPLEMENTED();
+        block_manager_->read_block(cur_block_id, content.data());
+        content.resize(content.size() + block_size);
+        UNIMPLEMENTED();
+
         read_sz += sz;
     }
-    content.resize(file_sz);
 
     return ChfsResult<std::vector<u8>>(std::move(content));
 
