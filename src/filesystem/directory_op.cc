@@ -1,7 +1,12 @@
 #include <algorithm>
+#include <iostream>
+#include <optional>
 #include <sstream>
+#include <string>
+#include <string_view>
 
 #include "filesystem/directory_op.h"
+#include "common/result.h"
 
 namespace chfs {
 
@@ -9,62 +14,76 @@ namespace chfs {
  * Some helper functions
  */
 auto string_to_inode_id(std::string &data) -> inode_id_t {
-  std::stringstream ss(data);
-  inode_id_t inode;
-  ss >> inode;
-  return inode;
+    std::stringstream ss(data);
+    inode_id_t inode;
+    ss >> inode;
+    return inode;
 }
 
 auto inode_id_to_string(inode_id_t id) -> std::string {
-  std::stringstream ss;
-  ss << id;
-  return ss.str();
+    std::stringstream ss;
+    ss << id;
+    return ss.str();
 }
 
 // {Your code here}
 auto dir_list_to_string(const std::list<DirectoryEntry> &entries)
     -> std::string {
-  std::ostringstream oss;
-  usize cnt = 0;
-  for (const auto &entry : entries) {
-    oss << entry.name << ':' << entry.id;
-    if (cnt < entries.size() - 1) {
-      oss << '/';
+    std::ostringstream oss;
+    usize cnt = 0;
+    for (const auto &entry : entries) {
+        oss << entry.name << ':' << entry.id;
+        if (cnt < entries.size() - 1) {
+            oss << '/';
+        }
+        cnt += 1;
     }
-    cnt += 1;
-  }
-  return oss.str();
+    return oss.str();
 }
 
 // {Your code here}
-auto append_to_directory(std::string src, std::string filename, inode_id_t id)
-    -> std::string {
+auto append_to_directory(std::string src, std::string filename,
+                         inode_id_t id) -> std::string {
 
-  // TODO: Implement this function.
-  //       Append the new directory entry to `src`.
-  UNIMPLEMENTED();
-  
-  return src;
+    // TODO: Implement this function.
+    //       Append the new directory entry to `src`.
+    // UNIMPLEMENTED();
+    std::string append = filename + ':' + inode_id_to_string(id) + '/';
+    src += append;
+    std::cout << src << std::endl;
+    return src;
 }
 
 // {Your code here}
 void parse_directory(std::string &src, std::list<DirectoryEntry> &list) {
 
-  // TODO: Implement this function.
-  UNIMPLEMENTED();
-
+    // TODO: Implement this function.
+    // UNIMPLEMENTED();
+    // ATTENTION src is 'const'
+    auto idx = std::string::npos;
+    std::string_view sv = src;
+    while ((idx = sv.find_first_of('/')) != std::string::npos) {
+        auto item = sv.substr(0, idx);
+        auto item_str = std::string(item);
+        auto delim = item.find_first_of(':');
+        auto inode_id_str = item_str.substr(delim + 1);
+        list.push_back(
+            {item_str.substr(0, delim), string_to_inode_id(inode_id_str)});
+        sv = sv.substr(idx + 1);
+    }
 }
 
 // {Your code here}
 auto rm_from_directory(std::string src, std::string filename) -> std::string {
-
-  auto res = std::string("");
-
-  // TODO: Implement this function.
-  //       Remove the directory entry from `src`.
-  UNIMPLEMENTED();
-
-  return res;
+    // TODO: Implement this function.
+    //       Remove the directory entry from `src`.
+    // UNIMPLEMENTED();
+    auto start_idx = src.find(filename);
+    if (start_idx != std::string::npos) {
+        auto end_idx = src.find_first_of('/', start_idx);
+        src = src.substr(0, start_idx) + src.substr(end_idx + 1);
+    }
+    return src;
 }
 
 /**
@@ -72,48 +91,54 @@ auto rm_from_directory(std::string src, std::string filename) -> std::string {
  */
 auto read_directory(FileOperation *fs, inode_id_t id,
                     std::list<DirectoryEntry> &list) -> ChfsNullResult {
-  
-  // TODO: Implement this function.
-  UNIMPLEMENTED();
 
-  return KNullOk;
+    // TODO: Implement this function.
+    // UNIMPLEMENTED();
+    auto res = fs->read_file(id);
+    if (res.is_err()) {
+        return ChfsNullResult(res.unwrap_error());
+    }
+    std::vector<u8> content = res.unwrap();
+    std::string src = std::string(content.begin(), content.end());
+    parse_directory(src, list);
+    return KNullOk;
 }
 
 // {Your code here}
-auto FileOperation::lookup(inode_id_t id, const char *name)
-    -> ChfsResult<inode_id_t> {
-  std::list<DirectoryEntry> list;
+auto FileOperation::lookup(inode_id_t id,
+                           const char *name) -> ChfsResult<inode_id_t> {
+    std::list<DirectoryEntry> list;
 
-  // TODO: Implement this function.
-  UNIMPLEMENTED();
+    // TODO: Implement this function.
+    UNIMPLEMENTED();
 
-  return ChfsResult<inode_id_t>(ErrorType::NotExist);
+    return ChfsResult<inode_id_t>(ErrorType::NotExist);
 }
 
 // {Your code here}
-auto FileOperation::mk_helper(inode_id_t id, const char *name, InodeType type)
-    -> ChfsResult<inode_id_t> {
+auto FileOperation::mk_helper(inode_id_t id, const char *name,
+                              InodeType type) -> ChfsResult<inode_id_t> {
 
-  // TODO:
-  // 1. Check if `name` already exists in the parent.
-  //    If already exist, return ErrorType::AlreadyExist.
-  // 2. Create the new inode.
-  // 3. Append the new entry to the parent directory.
-  UNIMPLEMENTED();
+    // TODO:
+    // 1. Check if `name` already exists in the parent.
+    //    If already exist, return ErrorType::AlreadyExist.
+    // 2. Create the new inode.
+    // 3. Append the new entry to the parent directory.
+    UNIMPLEMENTED();
 
-  return ChfsResult<inode_id_t>(static_cast<inode_id_t>(0));
+    return ChfsResult<inode_id_t>(static_cast<inode_id_t>(0));
 }
 
 // {Your code here}
-auto FileOperation::unlink(inode_id_t parent, const char *name)
-    -> ChfsNullResult {
+auto FileOperation::unlink(inode_id_t parent,
+                           const char *name) -> ChfsNullResult {
 
-  // TODO: 
-  // 1. Remove the file, you can use the function `remove_file`
-  // 2. Remove the entry from the directory.
-  UNIMPLEMENTED();
-  
-  return KNullOk;
+    // TODO:
+    // 1. Remove the file, you can use the function `remove_file`
+    // 2. Remove the entry from the directory.
+    UNIMPLEMENTED();
+
+    return KNullOk;
 }
 
 } // namespace chfs
