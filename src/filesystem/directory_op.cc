@@ -185,8 +185,9 @@ auto FileOperation::unlink(inode_id_t parent,
     if (dir.is_err()) {
         return ChfsNullResult(dir.unwrap_error());
     }
-    auto content_str = std::string(dir.unwrap().begin(), dir.unwrap().end());
-    rm_from_directory(content_str, name);
+    auto dir_content = dir.unwrap();
+    auto content_str = std::string(dir_content.begin(), dir_content.end());
+    content_str = rm_from_directory(content_str, name);
     auto res = this->write_file(
         parent, std::vector<u8>(content_str.begin(), content_str.end()));
     return res;

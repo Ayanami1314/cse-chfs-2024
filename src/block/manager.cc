@@ -109,7 +109,7 @@ auto BlockManager::zero_block(block_id_t block_id) -> ChfsNullResult {
     // TODO: Implement this function.
     // UNIMPLEMENTED();
     u8 *target = block_id * this->block_sz + this->block_data;
-    memset(target, 0, this->block_sz);
+    memset(target, 0, this->block_sz * sizeof(u8));
     return KNullOk;
 }
 
