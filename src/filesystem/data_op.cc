@@ -153,7 +153,6 @@ auto FileOperation::write_file(inode_id_t id, const std::vector<u8> &content)
 
     } else {
         // We need to free the extra blocks.
-        // ATTENTION ERROR here
         for (usize idx = new_block_num; idx < old_block_num; ++idx) {
             if (inode_p->is_direct_block(idx)) {
 
@@ -230,6 +229,8 @@ auto FileOperation::write_file(inode_id_t id, const std::vector<u8> &content)
 
                 // TODO: Implement getting block id of current indirect block.
                 // UNIMPLEMENTED();
+                CHFS_ASSERT(indirect_block.size() != 0,
+                            "indirect block should not be empty");
                 cur_block_id = (reinterpret_cast<block_id_t *>(
                     indirect_block.data()))[block_idx - inlined_blocks_num];
                 CHFS_ASSERT(cur_block_id > 0,
@@ -305,15 +306,18 @@ auto FileOperation::read_file(inode_id_t id) -> ChfsResult<std::vector<u8>> {
     content.reserve(file_sz);
     if (file_sz > inline_blocks_num * block_size) {
         block_id_t indirect_block_id = inode_p->get_indirect_block_id();
+
+        indirect_block.resize(block_size);
         auto res = block_manager_->read_block(indirect_block_id,
                                               indirect_block.data());
         if (res.is_err()) {
             error_code = res.unwrap_error();
             goto err_ret;
         }
-        indirect_block.resize(
-            block_size); // ATTENTION: read/reserve NOT update size
+        // ATTENTION: read/reserve NOT update size
     }
+    // ATTENTION: need reserve little more space(1 block size upperbound)
+    content.resize((file_sz + block_size - 1) / block_size * block_size);
     // Now read the file
     while (read_sz < file_sz) {
         auto sz = ((inode_p->get_size() - read_sz) > block_size)
@@ -330,9 +334,13 @@ auto FileOperation::read_file(inode_id_t id) -> ChfsResult<std::vector<u8>> {
         } else {
             // TODO: Implement the case of indirect block.
             // UNIMPLEMENTED();
+            CHFS_ASSERT(indirect_block.size() != 0,
+                        "indirect block should not be empty");
             cur_block_id = (reinterpret_cast<block_id_t *>(
                 indirect_block
                     .data()))[read_sz / block_size - inline_blocks_num];
+            CHFS_ASSERT(cur_block_id != 0, "cur_block_id should not be 0");
+
             // std::cout << cur_block_id << std::endl;
         }
 

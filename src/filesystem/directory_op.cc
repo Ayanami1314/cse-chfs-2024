@@ -145,8 +145,8 @@ auto FileOperation::mk_helper(inode_id_t id, const char *name,
     if (content.is_err()) {
         return ChfsResult<inode_id_t>(content.unwrap_error());
     }
-    auto content_str =
-        std::string(content.unwrap().begin(), content.unwrap().end());
+    std::vector<u8> content_vec = content.unwrap();
+    auto content_str = std::string(content_vec.begin(), content_vec.end());
     std::list<DirectoryEntry> entries;
     parse_directory(content_str, entries);
     for (const auto &[entry_name, id] : entries) {
@@ -160,7 +160,7 @@ auto FileOperation::mk_helper(inode_id_t id, const char *name,
         return ChfsResult<inode_id_t>(new_inode.unwrap_error());
     }
     auto new_inode_id = new_inode.unwrap();
-    append_to_directory(content_str, name, new_inode_id);
+    content_str = append_to_directory(content_str, name, new_inode_id);
     auto write_res = this->write_file(
         id, std::vector<u8>(content_str.begin(), content_str.end()));
     if (write_res.is_err()) {
