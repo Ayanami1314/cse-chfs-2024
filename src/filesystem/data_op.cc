@@ -1,6 +1,7 @@
 #include <cstring>
 #include <ctime>
 #include <iostream>
+#include <ostream>
 #include <vector>
 
 #include "common/config.h"
@@ -73,6 +74,7 @@ auto FileOperation::write_file_w_off(inode_id_t id, const char *data, u64 sz,
 // {Your code here}
 auto FileOperation::write_file(inode_id_t id, const std::vector<u8> &content)
     -> ChfsNullResult {
+    std::cout << "Write file " << id << std::endl;
     auto error_code = ErrorType::DONE;
     const auto block_size = this->block_manager_->block_size();
     usize old_block_num = 0;
@@ -102,11 +104,13 @@ auto FileOperation::write_file(inode_id_t id, const std::vector<u8> &content)
         error_code = ErrorType::OUT_OF_RESOURCE;
         goto err_ret;
     }
-
+    CHFS_ASSERT(inlined_blocks_num == inode_p->get_direct_block_num(),
+                "Unchanged inlined_blocks_num");
     // 2. make sure whether we need to allocate more blocks
     original_file_sz = inode_p->get_size();
     old_block_num = calculate_block_sz(original_file_sz, block_size);
     new_block_num = calculate_block_sz(content.size(), block_size);
+
     if (new_block_num > inlined_blocks_num ||
         old_block_num > inlined_blocks_num) {
         auto indirect_block_id =
@@ -119,6 +123,7 @@ auto FileOperation::write_file(inode_id_t id, const std::vector<u8> &content)
         block_manager_->read_block(indirect_block_id.unwrap(),
                                    indirect_block.data());
     }
+
     if (new_block_num > old_block_num) {
         // If we need to allocate more blocks.
         for (usize idx = old_block_num; idx < new_block_num; ++idx) {
@@ -140,16 +145,15 @@ auto FileOperation::write_file(inode_id_t id, const std::vector<u8> &content)
             std::cout << "alloc id: " << alloc_bid << std::endl;
             if (inode_p->is_direct_block(idx)) {
                 inode_p->set_block_direct(idx, alloc_bid);
-                continue;
+            } else {
+
+                CHFS_ASSERT(idx >= inlined_blocks_num, "Invalid index");
+                // ATTENTION: indirect block is not inode
+                memcpy(indirect_block.data() +
+                           (idx - inlined_blocks_num) * sizeof(block_id_t),
+                       &alloc_bid, sizeof(block_id_t));
             }
-            (reinterpret_cast<block_id_t *>(
-                indirect_block.data()))[idx - inlined_blocks_num] = alloc_bid;
         }
-        // if (new_block_num > inlined_blocks_num ||
-        //     old_block_num > inlined_blocks_num) {
-        //     block_manager_->write_block(inode_p->get_indirect_block_id(),
-        //                                 indirect_block.data());
-        // }
 
     } else {
         // We need to free the extra blocks.
@@ -158,7 +162,7 @@ auto FileOperation::write_file(inode_id_t id, const std::vector<u8> &content)
 
                 // TODO: Free the direct extra block.
                 // UNIMPLEMENTED();
-                auto bid = (*inode_p)[idx];
+                auto bid = inode_p->get_block_direct(idx);
                 auto res = block_allocator_->deallocate(bid);
                 if (res.is_err()) {
                     goto err_ret;
@@ -169,14 +173,18 @@ auto FileOperation::write_file(inode_id_t id, const std::vector<u8> &content)
 
                 // TODO: Free the indirect extra block.
                 // UNIMPLEMENTED();
+                CHFS_ASSERT(idx >= inlined_blocks_num,
+                            "free_bid should be positive");
                 auto indirect_block_idx = idx - inlined_blocks_num;
-                auto free_bid = reinterpret_cast<block_id_t *>(
-                    indirect_block.data())[indirect_block_idx];
-                CHFS_ASSERT(free_bid > 0, "free_bid should be positive");
-
-                reinterpret_cast<block_id_t *>(
-                    indirect_block.data())[indirect_block_idx] =
-                    KInvalidBlockID;
+                block_id_t free_bid = 0;
+                memcpy(&free_bid,
+                       indirect_block.data() +
+                           indirect_block_idx * sizeof(block_id_t),
+                       sizeof(block_id_t));
+                auto invalid_bid = KInvalidBlockID;
+                memcpy(indirect_block.data() +
+                           indirect_block_idx * sizeof(block_id_t),
+                       &invalid_bid, sizeof(block_id_t));
                 auto res = block_allocator_->deallocate(free_bid);
                 std::cout << "dealloc indirect id: " << free_bid << std::endl;
                 if (res.is_err()) {
@@ -185,11 +193,6 @@ auto FileOperation::write_file(inode_id_t id, const std::vector<u8> &content)
                 }
             }
         }
-        // if (old_block_num > inlined_blocks_num ||
-        //     new_block_num > inlined_blocks_num) {
-        //     this->block_manager_->write_block(inode_p->get_indirect_block_id(),
-        //                                       indirect_block.data());
-        // }
         // If there are no more indirect blocks.
         if (old_block_num > inlined_blocks_num &&
             new_block_num <= inlined_blocks_num && true) {
@@ -207,6 +210,7 @@ auto FileOperation::write_file(inode_id_t id, const std::vector<u8> &content)
 
     // 3. write the contents
     inode_p->inner_attr.size = content.size();
+    // std::cout << "size: " << content.size() << std::endl;
     inode_p->inner_attr.mtime = time(0);
 
     {
@@ -214,7 +218,7 @@ auto FileOperation::write_file(inode_id_t id, const std::vector<u8> &content)
         u64 write_sz = 0;
 
         while (write_sz < content.size()) {
-            auto sz = ((content.size() - write_sz) > block_size)
+            auto sz = (content.size() > write_sz + block_size)
                           ? block_size
                           : (content.size() - write_sz);
             std::vector<u8> buffer(block_size);
@@ -224,17 +228,19 @@ auto FileOperation::write_file(inode_id_t id, const std::vector<u8> &content)
 
                 // TODO: Implement getting block id of current direct block.
                 // UNIMPLEMENTED();
-                cur_block_id = (*inode_p)[block_idx];
+                CHFS_ASSERT(block_idx < inlined_blocks_num && block_idx >= 0,
+                            "Invalid index in write_file");
+                cur_block_id = inode_p->get_block_direct(block_idx);
             } else {
 
                 // TODO: Implement getting block id of current indirect block.
                 // UNIMPLEMENTED();
                 CHFS_ASSERT(indirect_block.size() != 0,
                             "indirect block should not be empty");
+                CHFS_ASSERT(block_idx >= inlined_blocks_num,
+                            "cur_block_id index should be positive");
                 cur_block_id = (reinterpret_cast<block_id_t *>(
                     indirect_block.data()))[block_idx - inlined_blocks_num];
-                CHFS_ASSERT(cur_block_id > 0,
-                            "cur_block_id should be positive");
             }
 
             // TODO: Write to current block.
@@ -257,6 +263,10 @@ auto FileOperation::write_file(inode_id_t id, const std::vector<u8> &content)
 
         auto write_res =
             this->block_manager_->write_block(inode_res.unwrap(), inode.data());
+        std::cout << "update block :" << inode_res.unwrap()
+                  << " , new size: " << inode_p->get_size()
+                  << (indirect_block.size() != 0 ? " (in)" : "") << std::endl;
+        std::flush(std::cout);
         if (write_res.is_err()) {
             error_code = write_res.unwrap_error();
             goto err_ret;
@@ -274,7 +284,7 @@ auto FileOperation::write_file(inode_id_t id, const std::vector<u8> &content)
     return KNullOk;
 
 err_ret:
-    // std::cerr << "write file return error: " << (int)error_code << std::endl;
+    std::cerr << "write file return error: " << (int)error_code << std::endl;
     return ChfsNullResult(error_code);
 }
 
@@ -303,6 +313,11 @@ auto FileOperation::read_file(inode_id_t id) -> ChfsResult<std::vector<u8>> {
     }
 
     file_sz = inode_p->get_size();
+    if (file_sz > inode_p->max_file_sz_supported()) {
+        error_code = ErrorType::OUT_OF_RESOURCE;
+        goto err_ret;
+    }
+
     content.reserve(file_sz);
     if (file_sz > inline_blocks_num * block_size) {
         block_id_t indirect_block_id = inode_p->get_indirect_block_id();
@@ -317,7 +332,7 @@ auto FileOperation::read_file(inode_id_t id) -> ChfsResult<std::vector<u8>> {
         // ATTENTION: read/reserve NOT update size
     }
     // ATTENTION: need reserve little more space(1 block size upperbound)
-    content.resize((file_sz + block_size - 1) / block_size * block_size);
+    content.resize(((file_sz + block_size - 1) / block_size) * block_size);
     // Now read the file
     while (read_sz < file_sz) {
         auto sz = ((inode_p->get_size() - read_sz) > block_size)
@@ -329,16 +344,20 @@ auto FileOperation::read_file(inode_id_t id) -> ChfsResult<std::vector<u8>> {
         if (inode_p->is_direct_block(read_sz / block_size)) {
             // TODO: Implement the case of direct block.
             // UNIMPLEMENTED();
-            cur_block_id = (*inode_p)[read_sz / block_size];
+            cur_block_id = inode_p->get_block_direct(read_sz / block_size);
 
         } else {
             // TODO: Implement the case of indirect block.
             // UNIMPLEMENTED();
-            CHFS_ASSERT(indirect_block.size() != 0,
+            CHFS_ASSERT(indirect_block.size() == block_size,
                         "indirect block should not be empty");
-            cur_block_id = (reinterpret_cast<block_id_t *>(
-                indirect_block
-                    .data()))[read_sz / block_size - inline_blocks_num];
+            CHFS_ASSERT(read_sz / block_size - inline_blocks_num >= 0,
+                        "invalid index");
+            memcpy(&cur_block_id,
+                   indirect_block.data() +
+                       (read_sz / block_size - inline_blocks_num) *
+                           sizeof(block_id_t),
+                   sizeof(block_id_t));
             CHFS_ASSERT(cur_block_id != 0, "cur_block_id should not be 0");
 
             // std::cout << cur_block_id << std::endl;

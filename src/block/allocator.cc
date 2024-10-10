@@ -146,6 +146,8 @@ auto BlockAllocator::allocate() -> ChfsResult<block_id_t> {
 // Your implementation
 auto BlockAllocator::deallocate(block_id_t block_id) -> ChfsNullResult {
     if (block_id >= this->bm->total_blocks()) {
+        std::cerr << "invalid id: try to deallocate a too large block id: "
+                  << block_id << std::endl;
         return ChfsNullResult(ErrorType::INVALID_ARG);
     }
 
@@ -170,6 +172,8 @@ auto BlockAllocator::deallocate(block_id_t block_id) -> ChfsNullResult {
 
     // is free block
     if (!bitmap.check(block_id % total_bits_per_block)) {
+        std::cerr << "deallocate: double free, block id: " << block_id
+                  << std::endl;
         return ChfsNullResult(ErrorType::INVALID_ARG);
     }
     bitmap.clear(block_id % total_bits_per_block);

@@ -106,21 +106,13 @@ auto InodeManager::allocate_inode(InodeType type,
             // Setup table
             const auto inode_bits_per_block =
                 bm->block_size() * KBitsPerByte; // a block of pitmap
-            const auto inode_per_block =
-                bm->block_size() / sizeof(block_id_t); // a block of table
-            const auto table_block_id =
-                1 + count * inode_bits_per_block /
-                        inode_per_block; // 1: super block
-            const auto table_offset = free_idx.value() % inode_per_block;
-            std::vector<u8> buffer(bm->block_size());
-            bm->read_block(table_block_id, buffer.data());
-            // get_direct_block_num()?
-            memcpy(buffer.data() + table_offset * sizeof(block_id_t), &bid,
-                   sizeof(block_id_t));
-            bm->write_block(table_block_id, buffer.data());
+                                                 // FIXME: bug here?
+            const inode_id_t inode_id =
+                count * inode_bits_per_block + free_idx.value();
+            set_table(inode_id, bid);
             // UNIMPLEMENTED();
 
-            return ChfsResult<inode_id_t>(RAW_2_LOGIC(free_idx.value()));
+            return ChfsResult<inode_id_t>(RAW_2_LOGIC(inode_id));
         }
     }
 
@@ -227,6 +219,8 @@ auto InodeManager::get_type_attr(inode_id_t id)
 auto InodeManager::read_inode(inode_id_t id, std::vector<u8> &buffer)
     -> ChfsResult<block_id_t> {
     if (id >= max_inode_supported - 1) {
+        std::cerr << "invalid id: exceed maxium inode id supported, id: " << id
+                  << std::endl;
         return ChfsResult<block_id_t>(ErrorType::INVALID_ARG);
     }
 
@@ -236,6 +230,8 @@ auto InodeManager::read_inode(inode_id_t id, std::vector<u8> &buffer)
     }
 
     if (block_id.unwrap() == KInvalidBlockID) {
+        std::cerr << "invalid inode: whose block is invalid, id: " << id
+                  << std::endl;
         return ChfsResult<block_id_t>(ErrorType::INVALID_ARG);
     }
 
@@ -251,6 +247,8 @@ auto InodeManager::free_inode(inode_id_t id) -> ChfsNullResult {
 
     // simple pre-checks
     if (id >= max_inode_supported - 1) {
+        std::cerr << "invalid id: exceed maxium inode id supported, id: " << id
+                  << std::endl;
         return ChfsNullResult(ErrorType::INVALID_ARG);
     }
 
